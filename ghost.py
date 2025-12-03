@@ -4,12 +4,18 @@ import paramiko
 import sys
 import time
 import datetime
-import google.generativeai as genai
+import os
+try:
+    import google.generativeai as genai
+except Exception:
+    genai = None
 
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
-API_KEY = "AIzaSyAE3qpZT9o2iJ1_b8Drbdb0GOm6iSI2GVM"  # <--- PASTE KEY HERE
+# Read API key from environment to avoid committing secrets.
+# Set `GENAI_API_KEY` or `GOOGLE_API_KEY` in your environment if you want AI mode.
+API_KEY = os.environ.get('GENAI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
 HOST_KEY_FILE = 'server.key'
 PORT = 2222
 LOG_FILE = "hacker_logs.txt"
@@ -35,36 +41,40 @@ def log_event(message):
 # ==========================================
 # 3. AUTO-DETECT AI MODEL
 # ==========================================
-try:
-    log_event("[*] Connecting to Google AI...")
-    genai.configure(api_key=API_KEY)
-    
-    # Auto-Discovery Logic
-    available_models = []
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            available_models.append(m.name)
-            
-    if not available_models:
-        log_event("[CRITICAL] No available models found on this API Key!")
-        sys.exit(1)
+chat = None
+if genai is None:
+    log_event("[!] google.generativeai library not available; AI mode disabled.")
+elif not API_KEY:
+    log_event("[!] No API key found in environment (GENAI_API_KEY / GOOGLE_API_KEY). AI mode disabled.")
+else:
+    try:
+        log_event("[*] Connecting to Google AI...")
+        genai.configure(api_key=API_KEY)
 
-    model_name = next((m for m in available_models if 'flash' in m), None)
-    if not model_name:
-        model_name = next((m for m in available_models if 'pro' in m), available_models[0])
-    
-    log_event(f"[+] SUCCESS! Selected Model: {model_name}")
-    
-    model = genai.GenerativeModel(model_name)
-    chat = model.start_chat(history=[
-        {"role": "user", "parts": "You are a Ubuntu 22.04 Linux Terminal. I am the user. When I send a command, reply ONLY with the text output. Do not explain anything. Fake a realistic file system. If I type 'pwd', output '/root'."},
-        {"role": "model", "parts": "/root"}
-    ])
-    log_event("[+] AI Brain Connected!")
+        # Auto-Discovery Logic
+        available_models = []
+        for m in genai.list_models():
+            if hasattr(m, 'supported_generation_methods') and 'generateContent' in getattr(m, 'supported_generation_methods', []):
+                available_models.append(m.name)
 
-except Exception as e:
-    log_event(f"[CRITICAL] AI Setup Failed: {e}")
-    sys.exit(1)
+        if not available_models:
+            log_event("[!] No available models found on this API Key. Falling back to echo mode.")
+        else:
+            model_name = next((m for m in available_models if 'flash' in m), None)
+            if not model_name:
+                model_name = next((m for m in available_models if 'pro' in m), available_models[0])
+
+            log_event(f"[+] SUCCESS! Selected Model: {model_name}")
+            model = genai.GenerativeModel(model_name)
+            chat = model.start_chat(history=[
+                {"role": "user", "parts": "You are a Ubuntu 22.04 Linux Terminal. I am the user. When I send a command, reply ONLY with the text output. Do not explain anything. Fake a realistic file system. If I type 'pwd', output '/root'."},
+                {"role": "model", "parts": "/root"}
+            ])
+            log_event("[+] AI Brain Connected!")
+
+    except Exception as e:
+        log_event(f"[!] AI Setup Failed: {e}. Falling back to echo mode.")
+        chat = None
 
 # Load Host Key
 try:
