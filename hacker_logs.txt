@@ -1,0 +1,21 @@
+[2025-12-02 19:48:31] [*] Connecting to Google AI...
+[2025-12-02 19:48:32] [+] SUCCESS! Selected Model: models/gemini-2.5-flash
+[2025-12-02 19:48:32] [+] AI Brain Connected!
+[2025-12-02 19:48:32] [*] GHOST TERMINAL ONLINE on Port 2222...
+[2025-12-02 19:49:15] [+] Victim Connected from: 127.0.0.1
+[2025-12-02 19:49:18] [!] CREDENTIALS CAPTURED: User='root' Password='k'
+[2025-12-02 19:49:21] [CMD] Victim (127.0.0.1) typed: ls
+[2025-12-02 19:49:27] [CMD] Victim (127.0.0.1) typed: pwd
+[2025-12-02 19:57:42] [*] Connecting to Google AI...
+[2025-12-02 19:57:44] [+] SUCCESS! Selected Model: models/gemini-2.5-flash
+[2025-12-02 19:57:44] [+] AI Brain Connected!
+[2025-12-02 19:57:44] [*] GHOST TERMINAL ONLINE on Port 2222...
+[2025-12-02 20:22:20] [*] Connecting to Google AI...
+[2025-12-02 20:22:21] [+] SUCCESS! Selected Model: models/gemini-2.5-flash
+[2025-12-02 20:22:21] [+] AI Brain Connected!
+[2025-12-02 20:22:21] [*] GHOST TERMINAL ONLINE on Port 2222...
+[2025-12-03 12:58:41] [+] Victim Connected from: 192.168.31.23
+[2025-12-03 13:00:08] [+] Victim Connected from: 192.168.31.23
+[2025-12-03 13:00:44] [!] CREDENTIALS CAPTURED: User='root' Password='khan'
+[2025-12-03 13:01:00] [CMD] Victim (192.168.31.23) typed: ls
+[2025-12-03 13:01:19] [CMD] Victim (192.168.31.23) typed: ls -la

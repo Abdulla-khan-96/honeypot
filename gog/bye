@@ -1,0 +1,541 @@
+import React, { useEffect, useState, createContext, useContext } from 'react';
+import { ShoppingCart, Package, ListChecks, Loader2, Zap } from 'lucide-react';
+
+// --- Type Definitions (Extracted from Redux Slice) ---
+interface Product {
+    _id: string;
+    name: string;
+    category: string;
+    price: number;
+    stock: number;
+}
+
+interface OrderItem {
+    productId: Product | string; // Can be populated Product object or just the ID
+    qty: number;
+}
+
+interface Order {
+    _id: string;
+    items: OrderItem[];
+    totalAmount: number;
+    status: 'Pending' | 'Shipped' | 'Delivered' | 'Cancelled';
+    createdAt: string;
+}
+
+interface InventoryState {
+    products: Product[];
+    orders: Order[];
+    status: 'idle' | 'loading' | 'failed' | 'succeeded';
+    error: string | null;
+}
+
+// --- Context Setup (Replacing Redux Store) ---
+
+// Define the shape of the context values (state and functions to modify state)
+interface InventoryContextProps extends InventoryState {
+    // Actions/API Calls:
+    fetchProducts: () => Promise<void>;
+    fetchOrders: () => Promise<void>;
+    placeOrder: (payload: { items: { productId: string; qty: number }[], totalAmount: number }) => Promise<string | void>;
+}
+
+// Initialize context with a default/dummy value
+const InventoryContext = createContext<InventoryContextProps>({
+    products: [],
+    orders: [],
+    status: 'idle',
+    error: null,
+    fetchProducts: async () => {},
+    fetchOrders: async () => {},
+    placeOrder: async () => {},
+});
+
+// Custom hook to use the inventory context (replaces useSelector/useDispatch combo)
+const useInventory = () => useContext(InventoryContext);
+
+// Mock Backend URL (MERN stack assumption)
+const API_BASE_URL = 'http://localhost:5000/api';
+
+
+// --- Provider Component (Replacing Redux Provider) ---
+const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const [state, setState] = useState<InventoryState>({
+        products: [],
+        orders: [],
+        status: 'idle',
+        error: null,
+    });
+
+    // Helper function for API calls
+    const safeFetch = async (url: string, options: RequestInit = {}) => {
+        setState(prev => ({ ...prev, status: 'loading', error: null }));
+        try {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || `HTTP error! Status: ${response.status}`);
+            }
+            return response.json();
+        } catch (error) {
+            const errorMessage = (error as Error).message || 'An unknown error occurred.';
+            setState(prev => ({ ...prev, status: 'failed', error: errorMessage }));
+            throw errorMessage; // Re-throw for component-level error handling
+        } finally {
+            // Set status to succeeded only if no error was thrown
+            if (state.error === null) {
+                setState(prev => ({ ...prev, status: 'succeeded' }));
+            }
+        }
+    };
+
+    // Simulate fetchProducts thunk
+    const fetchProducts = async () => {
+        try {
+            const data = await safeFetch(`${API_BASE_URL}/products`);
+            setState(prev => ({ ...prev, products: data, status: 'succeeded' }));
+        } catch (e) {
+            // Error handled by safeFetch, no need to re-throw here
+        }
+    };
+
+    // Simulate fetchOrders thunk
+    const fetchOrders = async () => {
+        try {
+            const data = await safeFetch(`${API_BASE_URL}/orders`);
+            // Data returned might have populated product fields for items
+            setState(prev => ({ ...prev, orders: data, status: 'succeeded' }));
+        } catch (e) {
+            // Error handled by safeFetch
+        }
+    };
+
+    // Simulate placeOrder thunk
+    const placeOrder = async (payload: { items: { productId: string; qty: number }[], totalAmount: number }): Promise<string | void> => {
+        try {
+            const data = await safeFetch(`${API_BASE_URL}/orders`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            
+            // On success, update the local state with the new order and refetch products (inventory change)
+            await fetchOrders();
+            await fetchProducts(); // Re-fetch inventory
+            return data.message || 'Order placed successfully!';
+
+        } catch (error) {
+            // Error message is the re-thrown string from safeFetch
+            return error as string; 
+        }
+    };
+
+    // The value provided to components
+    const contextValue: InventoryContextProps = {
+        ...state,
+        fetchProducts,
+        fetchOrders,
+        placeOrder,
+    };
+
+    return (
+        <InventoryContext.Provider value={contextValue}>
+            {children}
+        </InventoryContext.Provider>
+    );
+};
+
+
+// --- Components ---
+
+interface NotificationProps {
+  message: string | null;
+  type: 'success' | 'error';
+  onClose: () => void;
+}
+
+// Custom Notification/Alert component (replacing browser alerts)
+const Notification: React.FC<NotificationProps> = ({ message, type, onClose }) => {
+    if (!message) return null;
+
+    const baseClasses = "fixed top-4 right-4 p-4 rounded-lg shadow-xl flex items-center z-50 transition-transform duration-300 transform";
+    const colorClasses = type === 'error' 
+        ? 'bg-red-500 text-white' 
+        : 'bg-green-500 text-white';
+
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            onClose();
+        }, 5000);
+        return () => clearTimeout(timer);
+    }, [message, onClose]);
+
+    return (
+        <div className={`${baseClasses} ${colorClasses} slide-in-right`}>
+            {type === 'error' ? <Zap className="w-5 h-5 mr-2" /> : <ListChecks className="w-5 h-5 mr-2" />}
+            <span>{message}</span>
+            <button onClick={onClose} className="ml-4 font-bold">
+                &times;
+            </button>
+        </div>
+    );
+};
+
+// --- 1. Product Inventory Page Component ---
+const InventoryList: React.FC = () => {
+  const { products, status } = useInventory();
+  const LOW_STOCK_THRESHOLD = 10;
+
+  if (status === 'loading' && products.length === 0) return <div className="text-center p-4"><Loader2 className="animate-spin inline-block mr-2" /> Loading Inventory...</div>;
+
+  return (
+    <div className="bg-white p-6 rounded-xl shadow-lg h-full overflow-y-auto">
+      <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center border-b pb-2">
+        <Package className="mr-2 text-indigo-600" /> Current Inventory
+      </h2>
+      <div className="space-y-4">
+        {products.length === 0 ? (
+            <p className="text-gray-500">No products found. Please add one via the backend API.</p>
+        ) : (
+            products.map((product) => (
+            <div
+              key={product._id}
+              className={`p-4 border rounded-lg flex justify-between items-center transition duration-300 
+                ${product.stock < LOW_STOCK_THRESHOLD ? 'bg-yellow-50 border-yellow-400' : 'bg-gray-50 border-gray-200'}`}
+            >
+              <div>
+                <p className="font-semibold text-lg text-gray-800">{product.name}</p>
+                <p className="text-sm text-gray-500">{product.category} | ${product.price.toFixed(2)}</p>
+              </div>
+              <div className="text-right">
+                <p className="font-bold text-xl">
+                  {product.stock}
+                </p>
+                <p className={`text-sm font-medium ${product.stock < LOW_STOCK_THRESHOLD ? 'text-red-600' : 'text-green-600'}`}>
+                  {product.stock < LOW_STOCK_THRESHOLD ? 'LOW STOCK!' : 'In Stock'}
+                </p>
+              </div>
+            </div>
+            ))
+        )}
+      </div>
+    </div>
+  );
+};
+
+// --- 2. Place Order Form Component ---
+// Modified onOrderSuccess signature to include type
+const OrderForm: React.FC<{onOrderSuccess: (message: string, type: 'success' | 'error') => void}> = ({onOrderSuccess}) => {
+  const { products, placeOrder, status } = useInventory();
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [quantity, setQuantity] = useState<number>(1);
+  const [cart, setCart] = useState<(Product & { qty: number })[]>([]);
+  const orderStatus = status; // Use the global status for loading indicator
+
+  const totalAmount = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+
+  // Helper to find the full product object from ID
+  const getProductById = (id: string) => products.find(p => p._id === id);
+
+  useEffect(() => {
+    // Initialize selected product if products are available and none is selected
+    if (products.length > 0 && !selectedProduct) {
+        setSelectedProduct(products.find(p => p.stock > 0) || products[0]);
+    }
+
+    // Update cart items if their stock level changes (e.g., after an order is placed)
+    setCart(prevCart => prevCart.map(cartItem => {
+        const currentProduct = products.find(p => p._id === cartItem._id);
+        if (currentProduct) {
+            // Ensure cart quantity doesn't exceed new stock
+            const newQty = Math.min(cartItem.qty, currentProduct.stock);
+            return { ...currentProduct, qty: newQty };
+        }
+        return cartItem;
+    }));
+  }, [products, selectedProduct]);
+
+
+  const handleAddToCart = () => {
+    if (!selectedProduct || quantity <= 0) return;
+
+    if (quantity > selectedProduct.stock) {
+        onOrderSuccess(`Cannot add ${quantity} units. Only ${selectedProduct.stock} in stock.`, 'error');
+        return;
+    }
+
+    // Check if product is already in cart to update quantity
+    const existingItemIndex = cart.findIndex(item => item._id === selectedProduct._id);
+    
+    if (existingItemIndex > -1) {
+        const newCart = [...cart];
+        const newQty = newCart[existingItemIndex].qty + quantity;
+        
+        if (newQty > selectedProduct.stock) {
+            onOrderSuccess(`Total quantity exceeds stock limit of ${selectedProduct.stock}.`, 'error');
+            return;
+        }
+
+        newCart[existingItemIndex].qty = newQty;
+        setCart(newCart);
+    } else {
+        setCart([...cart, { ...selectedProduct, qty: quantity }]);
+    }
+    
+    setQuantity(1); // Reset quantity input
+    onOrderSuccess(`${selectedProduct.name} added to cart.`, 'success');
+  };
+
+  const handleRemoveFromCart = (productId: string) => {
+    setCart(cart.filter(item => item._id !== productId));
+  };
+
+  const handleSubmitOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cart.length === 0) {
+      onOrderSuccess('Cart is empty. Please add products.', 'error');
+      return;
+    }
+
+    const orderPayload = {
+      items: cart.map(item => ({ productId: item._id, qty: item.qty })),
+      totalAmount: parseFloat(totalAmount.toFixed(2)),
+    };
+
+    const result = await placeOrder(orderPayload);
+
+    if (typeof result === 'string') {
+        // This means placeOrder returned an error string
+        onOrderSuccess(`Order Failed: ${result}`, 'error');
+    } else {
+        // Success
+        setCart([]);
+        onOrderSuccess('Order placed successfully! Inventory updated.', 'success');
+    }
+  };
+
+  return (
+    <div className="bg-white p-6 rounded-xl shadow-lg h-full flex flex-col">
+      <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center border-b pb-2">
+        <ShoppingCart className="mr-2 text-green-600" /> Place New Order
+      </h2>
+      <form onSubmit={handleSubmitOrder} className="space-y-4 flex-grow flex flex-col">
+        {/* Product Selection */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <select
+            className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+            value={selectedProduct?._id || ''}
+            onChange={(e) => setSelectedProduct(getProductById(e.target.value) || null)}
+            required
+          >
+            {products.map(p => (
+              <option key={p._id} value={p._id} disabled={p.stock <= 0}>
+                {p.name} (${p.price.toFixed(2)}) {p.stock <= 0 ? '(Out of Stock)' : `(Stock: ${p.stock})`}
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            value={quantity}
+            min="1"
+            max={selectedProduct?.stock || 1}
+            onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+            placeholder="Qty"
+            className="w-20 p-3 border border-gray-300 rounded-lg text-center focus:ring-indigo-500 focus:border-indigo-500"
+            disabled={!selectedProduct || selectedProduct.stock <= 0}
+            required
+          />
+          <button
+            type="button"
+            onClick={handleAddToCart}
+            disabled={!selectedProduct || selectedProduct.stock <= 0 || orderStatus === 'loading'}
+            className="p-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition duration-300 disabled:opacity-50"
+          >
+            Add
+          </button>
+        </div>
+
+        {/* Cart Review */}
+        <div className="flex-grow bg-gray-50 p-4 rounded-lg overflow-y-auto shadow-inner">
+          <h3 className="text-md font-semibold mb-2 border-b pb-1">Cart ({cart.length} items)</h3>
+          {cart.length === 0 ? (
+            <p className="text-gray-500 text-sm">Your cart is empty.</p>
+          ) : (
+            cart.map(item => (
+              <div key={item._id} className="flex justify-between items-center py-2 border-b last:border-b-0">
+                <span className="text-gray-700 font-medium truncate">{item.name} (x{item.qty})</span>
+                <div className="flex items-center space-x-2">
+                    <span className="font-bold text-indigo-600">${(item.price * item.qty).toFixed(2)}</span>
+                    <button
+                        type="button"
+                        onClick={() => handleRemoveFromCart(item._id)}
+                        className="text-red-500 hover:text-red-700 text-sm p-1 rounded-full hover:bg-red-100"
+                    >
+                        &times;
+                    </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Submission */}
+        <div className="pt-4 border-t-2 border-gray-200">
+            <div className="flex justify-between items-center mb-3">
+                <span className="text-xl font-semibold text-gray-800">Total Amount:</span>
+                <span className="text-2xl font-extrabold text-green-600">${totalAmount.toFixed(2)}</span>
+            </div>
+            <button
+                type="submit"
+                disabled={cart.length === 0 || orderStatus === 'loading'}
+                className="w-full py-3 bg-green-600 text-white font-bold rounded-lg shadow-md hover:bg-green-700 transition duration-300 disabled:opacity-50 flex justify-center items-center"
+            >
+                {orderStatus === 'loading' ? (
+                    <>
+                        <Loader2 className="animate-spin mr-2 w-5 h-5" /> Placing Order...
+                    </>
+                ) : (
+                    'Submit Order'
+                )}
+            </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+// --- 3. Order List Page Component ---
+const OrderList: React.FC = () => {
+    const { orders, status, products } = useInventory();
+
+    const getStatusClasses = (status: Order['status']) => {
+        switch (status) {
+            case 'Delivered': return 'bg-green-100 text-green-700';
+            case 'Shipped': return 'bg-blue-100 text-blue-700';
+            case 'Pending': return 'bg-yellow-100 text-yellow-700';
+            case 'Cancelled': return 'bg-red-100 text-red-700';
+            default: return 'bg-gray-100 text-gray-700';
+        }
+    };
+
+    if (status === 'loading' && orders.length === 0) return <div className="text-center p-4"><Loader2 className="animate-spin inline-block mr-2" /> Loading Orders...</div>;
+
+    // Helper to resolve product name, as the item.productId might be an ID string or a partial Product object
+    const getProductName = (productId: Product | string | undefined) => {
+        if (!productId) return 'Unknown Product';
+        if (typeof productId === 'string') {
+            const product = products.find(p => p._id === productId);
+            return product?.name || 'Unknown Product (ID)';
+        }
+        return productId.name;
+    }
+
+    return (
+        <div className="bg-white p-6 rounded-xl shadow-lg h-full overflow-y-auto">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center border-b pb-2">
+                <ListChecks className="mr-2 text-purple-600" /> Placed Orders
+            </h2>
+            <div className="space-y-4">
+                {orders.length === 0 ? (
+                    <p className="text-gray-500">No orders have been placed yet.</p>
+                ) : (
+                    orders.map((order) => (
+                        <div key={order._id} className="p-4 border rounded-lg bg-white shadow-sm hover:shadow-md transition duration-300">
+                            <div className="flex justify-between items-start mb-2 border-b pb-2">
+                                <div>
+                                    <p className="text-sm text-gray-500">Order ID: <span className="font-mono text-xs">{order._id}</span></p>
+                                    <p className="text-md font-bold text-gray-800">Total: <span className="text-green-600">${order.totalAmount.toFixed(2)}</span></p>
+                                </div>
+                                <span className={`px-3 py-1 text-xs font-semibold rounded-full ${getStatusClasses(order.status)}`}>
+                                    {order.status}
+                                </span>
+                            </div>
+                            <div className="text-sm space-y-1">
+                                <p className="font-semibold text-gray-600">Items:</p>
+                                {order.items.map((item, index) => (
+                                    <p key={index} className="pl-3 text-gray-500 flex justify-between">
+                                        <span>{getProductName(item.productId)}</span>
+                                        <span className="font-medium">x{item.qty}</span>
+                                    </p>
+                                ))}
+                            </div>
+                            <p className="text-xs text-gray-400 mt-2 text-right">
+                                Placed on: {new Date(order.createdAt).toLocaleDateString()}
+                            </p>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+};
+
+// --- Main Application Component ---
+const InventoryAppContent: React.FC = () => {
+  const { fetchProducts, fetchOrders, error } = useInventory();
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  // Fetch initial data on component mount
+  useEffect(() => {
+    fetchProducts();
+    fetchOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Handle errors from Context state
+  useEffect(() => {
+    if (error) {
+        setNotification({ message: error, type: 'error' });
+    }
+  }, [error]);
+
+  const handleNotification = (message: string, type: 'success' | 'error') => {
+    setNotification({ message, type });
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100 p-4 sm:p-8 font-sans">
+      <h1 className="text-4xl font-extrabold text-gray-900 mb-8 text-center border-b-4 border-indigo-600 pb-2">
+        Inventory & Order Management (MERN Stack)
+      </h1>
+      
+      <Notification 
+        message={notification?.message || null} 
+        type={notification?.type || 'success'} 
+        onClose={() => setNotification(null)} 
+      />
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+        {/* Inventory List (Col 1) */}
+        <div className="lg:col-span-1">
+          <InventoryList />
+        </div>
+        
+        {/* Place Order Form (Col 2) */}
+        <div className="lg:col-span-1">
+          <OrderForm onOrderSuccess={(msg, type) => handleNotification(msg, type)} />
+        </div>
+
+        {/* Order List (Col 3) */}
+        <div className="lg:col-span-1">
+          <OrderList />
+        </div>
+      </div>
+      
+      <div className="text-center text-sm text-gray-500 pt-4 border-t">
+        Backend URL: http://localhost:5000/api
+      </div>
+    </div>
+  );
+};
+
+// Wrapper to provide Redux Store (now using Context Provider)
+export default function App() {
+    // Note: The original file was wrapped in <Provider store={store}>.
+    // We now wrap it with our custom InventoryProvider.
+    return (
+        <InventoryProvider>
+            <InventoryAppContent />
+        </InventoryProvider>
+    );
+}
